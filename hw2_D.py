@@ -127,7 +127,7 @@ def evaluate_performance(true_state_sequences, predicted_state_sequences):
     It compares the predicted state sequences with the true state sequences.
     It calculates and prints the recall, precision, F1-score, and accuracy for each label.
     """
-    labels = ['M', 'I', 'O']
+    labels = ['M', 'i', 'o']
     metrics = {label: {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0} for label in labels}
 
     for true_states, predicted_states in zip(true_state_sequences, predicted_state_sequences):
