@@ -1,268 +1,167 @@
 import numpy as np
 
-def read_data(filename):
+def load_data(file_path):
     """
-    This function reads the training data from a file.
-    It expects the data to be in a specific format:
-    - Each entry is separated by two newline characters.
-    - Each entry consists of three lines: a header, a sequence, and a state sequence.
-    The function returns two lists: sequences and their corresponding state sequences.
+    Load sequences and their state annotations from a specified file.
+    
+    Parameters:
+    - file_path: Path to the file containing the data.
+    
+    Returns:
+    - A tuple containing two lists: one for sequences and one for their corresponding state annotations.
     """
-    with open(filename, 'r') as file:
-        data = file.read().strip().split('\n\n')
-    sequences = []
-    state_sequences = []
-    for entry in data:
+    with open(file_path, 'r') as file:
+        raw_data = file.read().strip().split('\n\n')
+    seq_list = []
+    state_list = []
+    for entry in raw_data:
         parts = entry.split('\n')
         if len(parts) == 3:
-            sequences.append(parts[1].strip())
-            state_sequences.append(parts[2].strip().lstrip('#').strip())
-    return sequences, state_sequences
+            seq_list.append(parts[1].strip())
+            state_list.append(parts[2].strip().lstrip('#').strip())
+    return seq_list, state_list
 
-def count_transitions_and_emissions(sequences, state_sequences):
+def tally_trans_emissions(seq_list, state_list):
     """
-    This function counts the transitions between states and emissions of symbols for each state.
-    It takes the sequences and their corresponding state sequences as input.
-    It returns two dictionaries: transitions and emissions.
-    - transitions: counts of transitions between states.
-    - emissions: counts of symbols emitted from each state.
-    """
-    states = {'o', 'M', 'i'}
-    transitions = {s: {s2: 0 for s2 in states} for s in states}
-    emissions = {s: {} for s in states}
+    Count transitions between states and the emission of symbols from states.
     
-    for seq, states_seq in zip(sequences, state_sequences):
-        prev_state = None
-        for i, state in enumerate(states_seq):
-            if state not in states:
-                print(f"Unexpected state '{state}' found. Skipping.")
+    Parameters:
+    - seq_list: A list of sequences.
+    - state_list: A list of state sequences corresponding to the sequences.
+    
+    Returns:
+    - A tuple of two dictionaries: the first for transition counts and the second for emission counts.
+    """
+    valid_states = {'o', 'M', 'i'}
+    trans_count = {s: {s2: 0 for s2 in valid_states} for s in valid_states}
+    emit_count = {s: {} for s in valid_states}
+    
+    for seq, state_seq in zip(seq_list, state_list):
+        prev_s = None
+        for i, current_s in enumerate(state_seq):
+            if current_s not in valid_states:
+                print(f"Unexpected state '{current_s}' encountered. Skipping.")
                 continue
 
-            aa = seq[i]  # amino acid
-            if aa not in emissions[state]:
-                emissions[state][aa] = 1
+            symbol = seq[i]
+            if symbol not in emit_count[current_s]:
+                emit_count[current_s][symbol] = 1
             else:
-                emissions[state][aa] += 1
+                emit_count[current_s][symbol] += 1
             
-            if prev_state is not None:
-                transitions[prev_state][state] += 1
-            prev_state = state
+            if prev_s is not None:
+                trans_count[prev_s][current_s] += 1
+            prev_s = current_s
     
-    return transitions, emissions
+    return trans_count, emit_count
 
-def calculate_probabilities(transitions, emissions):
+def compute_probs(trans_count, emit_count):
     """
-    This function calculates the transition and emission probabilities based on the counts.
-    It applies smoothing to handle unseen transitions and emissions.
-    It returns two dictionaries: transition_probs and emission_probs.
-    - transition_probs: probabilities of transitioning from one state to another.
-    - emission_probs: probabilities of emitting a symbol from each state.
+    Calculate transition and emission probabilities from counts, applying smoothing.
+    
+    Parameters:
+    - trans_count: Dictionary of transition counts.
+    - emit_count: Dictionary of emission counts.
+    
+    Returns:
+    - A tuple of two dictionaries: transition probabilities and emission probabilities.
     """
-    smoothing_val = 1e-3
-    all_states = ['o', 'M', 'i']
-    all_symbols = set(sym for em in emissions.values() for sym in em)
+    smooth_val = 1e-3
+    states = ['o', 'M', 'i']
+    symbols = set(sym for em in emit_count.values() for sym in em)
 
-    transition_probs = {s: {} for s in transitions}
-    for s in all_states:
-        total_transitions = sum(transitions.get(s, {}).values()) + smoothing_val * len(all_states)
-        for s2 in all_states:
-            transition_probs[s][s2] = (transitions.get(s, {}).get(s2, 0) + smoothing_val) / total_transitions
+    trans_probs = {s: {} for s in trans_count}
+    for s in states:
+        total_trans = sum(trans_count.get(s, {}).values()) + smooth_val * len(states)
+        for s2 in states:
+            trans_probs[s][s2] = (trans_count.get(s, {}).get(s2, 0) + smooth_val) / total_trans
 
-    emission_probs = {s: {} for s in emissions}
-    for s in all_states:
-        total_emissions = sum(emissions.get(s, {}).values()) + smoothing_val * len(all_symbols)
-        for symbol in all_symbols:
-            emission_probs[s][symbol] = (emissions.get(s, {}).get(symbol, 0) + smoothing_val) / total_emissions
+    emit_probs = {s: {} for s in emit_count}
+    for s in states:
+        total_emits = sum(emit_count.get(s, {}).values()) + smooth_val * len(symbols)
+        for sym in symbols:
+            emit_probs[s][sym] = (emit_count.get(s, {}).get(sym, 0) + smooth_val) / total_emits
 
-    return transition_probs, emission_probs
+    return trans_probs, emit_probs
 
-def log_viterbi(seq, transition_probs, emission_probs):
+def viterbi_algorithm(sequence, trans_probs, emit_probs):
     """
-    This function implements the Viterbi algorithm with logarithm transformation.
-    It takes a sequence, transition probabilities, and emission probabilities as input.
-    It returns the most likely state sequence for the given sequence.
+    Implement the Viterbi algorithm using log probabilities to find the most likely state sequence.
+    
+    Parameters:
+    - sequence: The observed sequence for which to predict the state sequence.
+    - trans_probs: Transition probabilities.
+    - emit_probs: Emission probabilities.
+    
+    Returns:
+    - The most likely state sequence for the given observation sequence.
     """
-    state_map = {'o': 0, 'M': 1, 'i': 2}
-    V = np.full((3, len(seq)), -1000)
-    path = np.zeros((3, len(seq)), dtype=int)
-    state_list = ['o', 'M', 'i']
+    state_idx = {'o': 0, 'M': 1, 'i': 2}
+    log_prob_matrix = np.full((3, len(sequence)), -1000)
+    state_path_matrix = np.zeros((3, len(sequence)), dtype=int)
+    state_keys = ['o', 'M', 'i']
 
-    for s in state_list:
-        V[state_map[s], 0] = np.log(emission_probs[s].get(seq[0], 1e-10))
+    for state in state_keys:
+        log_prob_matrix[state_idx[state], 0] = np.log(emit_probs[state].get(sequence[0], 1e-10))
 
-    for t in range(1, len(seq)):
-        for s in state_list:
-            for ps in state_list:
-                prob = V[state_map[ps], t-1] + np.log(transition_probs[ps].get(s, 1e-10)) + np.log(emission_probs[s].get(seq[t], 1e-10))
-                if prob > V[state_map[s], t]:
-                    V[state_map[s], t] = prob
-                    path[state_map[s], t] = state_map[ps]
+    for i in range(1, len(sequence)):
+        for current_state in state_keys:
+            for prev_state in state_keys:
+                temp_prob = log_prob_matrix[state_idx[prev_state], i-1] + np.log(trans_probs[prev_state].get(current_state, 1e-10)) + np.log(emit_probs[current_state].get(sequence[i], 1e-10))
+                if temp_prob > log_prob_matrix[state_idx[current_state], i]:
+                    log_prob_matrix[state_idx[current_state], i] = temp_prob
+                    state_path_matrix[state_idx[current_state], i] = state_idx[prev_state]
 
-    best_last_state = np.argmax(V[:, -1])
-    best_path = [best_last_state]
-    for t in range(len(seq) - 1, 0, -1):
-        best_path.insert(0, path[best_path[0], t])
+    final_state = np.argmax(log_prob_matrix[:, -1])
+    optimal_path = [final_state]
+    for i in range(len(sequence) - 1, 0, -1):
+        optimal_path.insert(0, state_path_matrix[optimal_path[0], i])
 
-    best_path_str = ''.join(state_list[i] for i in best_path)
-    return best_path_str
+    optimal_path_str = ''.join(state_keys[i] for i in optimal_path)
+    return optimal_path_str
 
-def read_test_data(filename):
+def load_test_data(test_file_path):
     """
-    This function reads sequences from a test data file.
-    It expects each sequence to be in its own section, without state sequences.
-    It returns a list of sequences.
+    Load test sequences from a specified file, assuming no state annotations are present.
+    
+    Parameters:
+    - test_file_path: Path to the test data file.
+    
+    Returns:
+    - A list of test sequences.
     """
-    with open(filename, 'r') as file:
-        data = file.read().strip().split('\n\n')
-    sequences = []
-    for entry in data:
+    with open(test_file_path, 'r') as file:
+        raw_data = file.read().strip().split('\n\n')
+    test_seq_list = []
+    for entry in raw_data:
         parts = entry.split('\n')
         if len(parts) >= 2:
-            sequences.append(parts[1].strip())
-    return sequences
+            test_seq_list.append(parts[1].strip())
+    return test_seq_list
 
-import numpy as np
-
-def read_data(filename):
+def evaluate_performance(true_states, predicted_states):
     """
-    This function reads the training data from a file.
-    It expects the data to be in a specific format:
-    - Each entry is separated by two newline characters.
-    - Each entry consists of three lines: a header, a sequence, and a state sequence.
-    The function returns two lists: sequences and their corresponding state sequences.
-    """
-    with open(filename, 'r') as file:
-        data = file.read().strip().split('\n\n')
-    sequences = []
-    state_sequences = []
-    for entry in data:
-        parts = entry.split('\n')
-        if len(parts) == 3:
-            sequences.append(parts[1].strip())
-            state_sequences.append(parts[2].strip().lstrip('#').strip())
-    return sequences, state_sequences
-
-def count_transitions_and_emissions(sequences, state_sequences):
-    """
-    This function counts the transitions between states and emissions of symbols for each state.
-    It takes the sequences and their corresponding state sequences as input.
-    It returns two dictionaries: transitions and emissions.
-    - transitions: counts of transitions between states.
-    - emissions: counts of symbols emitted from each state.
-    """
-    states = {'o', 'M', 'i'}
-    transitions = {s: {s2: 0 for s2 in states} for s in states}
-    emissions = {s: {} for s in states}
+    Evaluate the performance of the predicted state sequences against the true state sequences.
     
-    for seq, states_seq in zip(sequences, state_sequences):
-        prev_state = None
-        for i, state in enumerate(states_seq):
-            if state not in states:
-                print(f"Unexpected state '{state}' found. Skipping.")
-                continue
-
-            aa = seq[i]  # amino acid
-            if aa not in emissions[state]:
-                emissions[state][aa] = 1
-            else:
-                emissions[state][aa] += 1
-            
-            if prev_state is not None:
-                transitions[prev_state][state] += 1
-            prev_state = state
+    Parameters:
+    - true_states: A list of true state sequences.
+    - predicted_states: A list of predicted state sequences.
     
-    return transitions, emissions
-
-def calculate_probabilities(transitions, emissions):
-    """
-    This function calculates the transition and emission probabilities based on the counts.
-    It applies smoothing to handle unseen transitions and emissions.
-    It returns two dictionaries: transition_probs and emission_probs.
-    - transition_probs: probabilities of transitioning from one state to another.
-    - emission_probs: probabilities of emitting a symbol from each state.
-    """
-    smoothing_val = 1e-3
-    all_states = ['o', 'M', 'i']
-    all_symbols = set(sym for em in emissions.values() for sym in em)
-
-    transition_probs = {s: {} for s in transitions}
-    for s in all_states:
-        total_transitions = sum(transitions.get(s, {}).values()) + smoothing_val * len(all_states)
-        for s2 in all_states:
-            transition_probs[s][s2] = (transitions.get(s, {}).get(s2, 0) + smoothing_val) / total_transitions
-
-    emission_probs = {s: {} for s in emissions}
-    for s in all_states:
-        total_emissions = sum(emissions.get(s, {}).values()) + smoothing_val * len(all_symbols)
-        for symbol in all_symbols:
-            emission_probs[s][symbol] = (emissions.get(s, {}).get(symbol, 0) + smoothing_val) / total_emissions
-
-    return transition_probs, emission_probs
-
-def log_viterbi(seq, transition_probs, emission_probs):
-    """
-    This function implements the Viterbi algorithm with logarithm transformation.
-    It takes a sequence, transition probabilities, and emission probabilities as input.
-    It returns the most likely state sequence for the given sequence.
-    """
-    state_map = {'o': 0, 'M': 1, 'i': 2}
-    V = np.full((3, len(seq)), -1000)
-    path = np.zeros((3, len(seq)), dtype=int)
-    state_list = ['o', 'M', 'i']
-
-    for s in state_list:
-        V[state_map[s], 0] = np.log(emission_probs[s].get(seq[0], 1e-10))
-
-    for t in range(1, len(seq)):
-        for s in state_list:
-            for ps in state_list:
-                prob = V[state_map[ps], t-1] + np.log(transition_probs[ps].get(s, 1e-10)) + np.log(emission_probs[s].get(seq[t], 1e-10))
-                if prob > V[state_map[s], t]:
-                    V[state_map[s], t] = prob
-                    path[state_map[s], t] = state_map[ps]
-
-    best_last_state = np.argmax(V[:, -1])
-    best_path = [best_last_state]
-    for t in range(len(seq) - 1, 0, -1):
-        best_path.insert(0, path[best_path[0], t])
-
-    best_path_str = ''.join(state_list[i] for i in best_path)
-    return best_path_str
-
-def read_test_data(filename):
-    """
-    This function reads sequences from a test data file.
-    It expects each sequence to be in its own section, without state sequences.
-    It returns a list of sequences.
-    """
-    with open(filename, 'r') as file:
-        data = file.read().strip().split('\n\n')
-    sequences = []
-    for entry in data:
-        parts = entry.split('\n')
-        if len(parts) >= 2:
-            sequences.append(parts[1].strip())
-    return sequences
-
-def evaluate_performance(true_state_sequences, predicted_state_sequences):
-    """
-    This function evaluates the performance of the predicted state sequences.
-    It compares the predicted state sequences with the true state sequences.
-    It calculates and prints the recall, precision, F1-score, and accuracy for each label.
+    Prints the recall, precision, F1-score, and accuracy for each state label.
     """
     labels = ['M', 'i', 'o']
     metrics = {label: {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0} for label in labels}
 
-    for true_states, predicted_states in zip(true_state_sequences, predicted_state_sequences):
-        for i in range(len(true_states)):
+    for true_seq, pred_seq in zip(true_states, predicted_states):
+        for i in range(len(true_seq)):
             for label in labels:
-                if predicted_states[i] == label:
-                    if true_states[i] == label:
+                if pred_seq[i] == label:
+                    if true_seq[i] == label:
                         metrics[label]['TP'] += 1
                     else:
                         metrics[label]['FP'] += 1
                 else:
-                    if true_states[i] == label:
+                    if true_seq[i] == label:
                         metrics[label]['FN'] += 1
                     else:
                         metrics[label]['TN'] += 1
@@ -273,31 +172,33 @@ def evaluate_performance(true_state_sequences, predicted_state_sequences):
         TN = metrics[label]['TN']
         FN = metrics[label]['FN']
         
-        R = TP / (TP + FN) if TP + FN != 0 else 0
-        P = TP / (TP + FP) if TP + FP != 0 else 0
-        F1 = 2 * (R * P) / (R + P) if R + P != 0 else 0
-        ACCU = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN != 0 else 0
+        recall = TP / (TP + FN) if TP + FN != 0 else 0
+        precision = TP / (TP + FP) if TP + FP != 0 else 0
+        F1 = 2 * (recall * precision) / (recall + precision) if recall + precision != 0 else 0
+        accuracy = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN != 0 else 0
         
-        print(f"Label {label}: Recall (R)={R:.4f}, Precision (P)={P:.4f}, F1-Score={F1:.4f}, Accuracy (ACCU)={ACCU:.4f}")
+        print(f"Label {label}: Recall={recall:.4f}, Precision={precision:.4f}, F1-Score={F1:.4f}, Accuracy={accuracy:.4f}")
 
 def main():
     """
-    The main function that orchestrates the entire analysis.
-    It loads the training data, calculates model parameters, loads the test data,
-    predicts the state sequences for the test sequences, and evaluates the performance.
+    Main function orchestrating the data loading, model training, prediction, and performance evaluation.
     """
-    train_sequences, train_state_sequences = read_data('hw2_train.data')
-    transitions, emissions = count_transitions_and_emissions(train_sequences, train_state_sequences)
-    transition_probs, emission_probs = calculate_probabilities(transitions, emissions)
+    # Load training data
+    train_seq_list, train_state_list = load_data('hw2_train.data') # Update 'hw2_train.data' with actual path
+    trans_count, emit_count = tally_trans_emissions(train_seq_list, train_state_list)
+    trans_probs, emit_probs = compute_probs(trans_count, emit_count)
     
-    test_sequences, true_state_sequences = read_data('hw2_test.data')
+    # Load test data and true state sequences for evaluation
+    test_seq_list, true_state_list = load_data('hw2_test.data') # Update 'hw2_train.data' with actual path
     
-    predicted_state_sequences = []
-    for seq in test_sequences:
-        predicted_states = log_viterbi(seq, transition_probs, emission_probs)
-        predicted_state_sequences.append(predicted_states)
+    # Predict state sequences for the test data
+    predicted_state_list = []
+    for seq in test_seq_list:
+        pred_states = viterbi_algorithm(seq, trans_probs, emit_probs)
+        predicted_state_list.append(pred_states)
     
-    evaluate_performance(true_state_sequences, predicted_state_sequences)
+    # Evaluate and print performance metrics
+    evaluate_performance(true_state_list, predicted_state_list)
 
 if __name__ == "__main__":
     main()
